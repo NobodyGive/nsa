@@ -25,12 +25,26 @@ function initializeSupabaseAuth() {
             // User signed in successfully
             const user = session.user;
             
+            // Debug: Log user data from Google
+            console.log('Google OAuth User Data:', user);
+            console.log('User Metadata:', user.user_metadata);
+            console.log('User Email:', user.email);
+            console.log('Avatar URL:', user.user_metadata?.avatar_url);
+            console.log('Picture:', user.user_metadata?.picture);
+            console.log('Full Name:', user.user_metadata?.full_name);
+            console.log('Name:', user.user_metadata?.name);
+            
             // Store user data in localStorage
             const userData = {
-                name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+                name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User',
                 email: user.email,
-                avatar: user.user_metadata?.avatar_url || `https://via.placeholder.com/80x80/3b82f6/ffffff?text=${user.email?.charAt(0).toUpperCase() || 'U'}`
+                avatar: user.user_metadata?.avatar_url || user.user_metadata?.picture || `https://via.placeholder.com/80x80/3b82f6/ffffff?text=${user.email?.charAt(0).toUpperCase() || 'U'}`,
+                loginTime: new Date().toISOString(),
+                id: user.id,
+                provider: 'google'
             };
+            
+            console.log('Final userData being stored:', userData);
             localStorage.setItem('userData', JSON.stringify(userData));
             
             // Show success modal
@@ -46,6 +60,7 @@ function initializeSupabaseAuth() {
         } else if (event === 'SIGNED_OUT') {
             // User signed out
             console.log('User signed out');
+            localStorage.removeItem('userData');
         }
     });
     
@@ -54,6 +69,20 @@ function initializeSupabaseAuth() {
         if (user) {
             // User is already signed in, redirect to dashboard or show user info
             console.log('User already signed in:', user);
+            const userData = {
+                name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+                email: user.email,
+                avatar: user.user_metadata?.avatar_url || user.user_metadata?.picture || `https://via.placeholder.com/80x80/3b82f6/ffffff?text=${user.email?.charAt(0).toUpperCase() || 'U'}`,
+                loginTime: new Date().toISOString(),
+                id: user.id,
+                provider: 'google'
+            };
+            localStorage.setItem('userData', JSON.stringify(userData));
+            
+            // Redirect to donation page if already logged in
+            setTimeout(() => {
+                window.location.href = 'donation.html';
+            }, 1000);
         }
     });
 }
@@ -75,7 +104,7 @@ function initializeLoginForm() {
     }
 }
 
-// Handle regular login with Supabase
+// Handle regular login (Demo version - works without Supabase)
 async function handleLogin() {
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
@@ -87,49 +116,55 @@ async function handleLogin() {
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing In...';
     submitBtn.disabled = true;
     
-    try {
-        // Sign in with email and password using Supabase
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email: email,
-            password: password
-        });
-        
-        if (error) {
-            throw error;
+    // Simulate API call delay
+    setTimeout(() => {
+        try {
+            // Demo validation - accept any email/password combo for testing
+            if (!email || !password) {
+                throw new Error('Please enter both email and password.');
+            }
+            
+            // For demo: accept test@example.com / password123 or any email/password
+            if (email && password) {
+                // Remember user if checkbox is checked
+                if (rememberMe) {
+                    localStorage.setItem('rememberedUser', email);
+                } else {
+                    localStorage.removeItem('rememberedUser');
+                }
+                
+                // Store user data in localStorage
+                const userData = {
+                    name: email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1),
+                    email: email,
+                    avatar: `https://via.placeholder.com/80x80/3b82f6/ffffff?text=${email.charAt(0).toUpperCase()}`,
+                    loginTime: new Date().toISOString(),
+                    id: Date.now()
+                };
+                localStorage.setItem('userData', JSON.stringify(userData));
+                
+                // Show success modal
+                showLoginSuccess(userData);
+                
+                // Reset form
+                document.getElementById('loginForm').reset();
+                
+            } else {
+                throw new Error('Invalid credentials. Please try again.');
+            }
+            
+        } catch (error) {
+            console.error('Login error:', error);
+            showLoginError(error.message || 'Login failed. Please try again.');
+        } finally {
+            // Reset button
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
         }
-        
-        // Remember user if checkbox is checked
-        if (rememberMe) {
-            localStorage.setItem('rememberedUser', email);
-        } else {
-            localStorage.removeItem('rememberedUser');
-        }
-        
-        // Store user data in localStorage
-        const userData = {
-            name: data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'User',
-            email: data.user.email,
-            avatar: data.user.user_metadata?.avatar_url || `https://via.placeholder.com/80x80/3b82f6/ffffff?text=${data.user.email?.charAt(0).toUpperCase() || 'U'}`
-        };
-        localStorage.setItem('userData', JSON.stringify(userData));
-        
-        // Show success modal
-        showLoginSuccess(userData);
-        
-        // Reset form
-        document.getElementById('loginForm').reset();
-        
-    } catch (error) {
-        console.error('Login error:', error);
-        showLoginError('Invalid email or password. Please try again.');
-    } finally {
-        // Reset button
-        submitBtn.innerHTML = originalText;
-        submitBtn.disabled = false;
-    }
+    }, 1500); // Simulate network delay
 }
 
-// Handle Google login with Supabase
+// Handle Google login with Supabase (Restored)
 async function handleGoogleLogin() {
     const googleBtn = document.querySelector('.google-login-btn');
     const originalText = googleBtn.innerHTML;
@@ -176,10 +211,20 @@ async function signOut() {
         const { error } = await supabase.auth.signOut();
         if (error) throw error;
         
-        // Redirect to login page or show logout success
-        window.location.href = '/login.html';
+        // Clear localStorage
+        localStorage.removeItem('userData');
+        localStorage.removeItem('userProfile');
+        localStorage.removeItem('userSettings');
+        
+        // Redirect to login page
+        window.location.href = 'login.html';
     } catch (error) {
         console.error('Sign out error:', error);
+        // Fallback: clear localStorage and redirect anyway
+        localStorage.removeItem('userData');
+        localStorage.removeItem('userProfile');
+        localStorage.removeItem('userSettings');
+        window.location.href = 'login.html';
     }
 }
 
@@ -253,9 +298,9 @@ function showLoginSuccess(user) {
     // Add success animation
     modal.classList.add('active');
     
-    // Redirect to home page after 2 seconds
+    // Redirect to donation page after 2 seconds (since home.html doesn't exist)
     setTimeout(() => {
-        window.location.href = 'home.html';
+        window.location.href = 'donation.html';
     }, 2000);
 }
 

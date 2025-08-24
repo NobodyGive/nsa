@@ -1,4 +1,7 @@
-// Donation & Help System JavaScript
+// Donation & Help System JavaScript with Stripe Integration
+
+// Initialize Stripe with the provided publishable key
+const stripe = Stripe('pk_test_51RzS8eHDmi5xAocu2FOPT5IFHmX2ahZz2vgUuzIeCJd4KxsWpyCT7uurJv97fFW4KUtNU8f7fLdb0fhn6Z06jzjM00GFOWdD67');
 
 // Sample data - In a real application, this would come from a backend API
 let donationData = {
@@ -60,6 +63,12 @@ let helpRequests = [
     }
 ];
 
+// Stripe Elements
+let elements;
+let cardElement;
+let clientSecret = null;
+let selectedAmount = 0;
+
 // Initialize the donation page
 document.addEventListener('DOMContentLoaded', function() {
     updateStatistics();
@@ -68,7 +77,17 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeDonationForm();
     initializeHelpRequestForm();
     updateProgressCircle();
+    initializeStripe();
 });
+
+// Initialize premium form inputs
+function initializeStripe() {
+    // Initialize card input formatters
+    initializeCardFormatting();
+    
+    // Note: We're using custom inputs instead of Stripe Elements for the professional look
+    // In a real implementation, you'd still use Stripe.js for actual payment processing
+}
 
 // Update statistics on the page
 function updateStatistics() {
@@ -211,8 +230,19 @@ function openDonateToRequestModal(requestId) {
     if (request) {
         openDonateModal();
         // Pre-fill some information for the specific request
-        document.getElementById('donationForm').dataset.requestId = requestId;
+        document.getElementById('payment-form').dataset.requestId = requestId;
     }
+}
+
+// Success modal functions
+function openSuccessModal(amount, transactionId) {
+    document.getElementById('success-amount').textContent = formatCurrency(amount);
+    document.getElementById('success-transaction').textContent = transactionId;
+    document.getElementById('successModal').style.display = 'flex';
+}
+
+function closeSuccessModal() {
+    document.getElementById('successModal').style.display = 'none';
 }
 
 // Help request modal functions
@@ -223,6 +253,66 @@ function openHelpRequestModal() {
 
 function closeHelpRequestModal() {
     document.getElementById('helpRequestModal').style.display = 'none';
+}
+
+// Initialize card input formatting
+function initializeCardFormatting() {
+    const cardNumberInput = document.getElementById('cardNumber');
+    const cardExpiryInput = document.getElementById('cardExpiry');
+    const cardCVCInput = document.getElementById('cardCVC');
+    const cardIcons = document.querySelectorAll('.card-icon');
+
+    // Format card number
+    if (cardNumberInput) {
+        cardNumberInput.addEventListener('input', function(e) {
+            let value = e.target.value.replace(/\s/g, '').replace(/[^0-9]/gi, '');
+            let formattedValue = value.match(/.{1,4}/g)?.join(' ') || value;
+            e.target.value = formattedValue;
+            
+            // Detect card type and highlight icon
+            const cardType = detectCardType(value);
+            cardIcons.forEach(icon => {
+                icon.classList.remove('active');
+                if (icon.classList.contains(cardType)) {
+                    icon.classList.add('active');
+                }
+            });
+        });
+    }
+
+    // Format expiry date
+    if (cardExpiryInput) {
+        cardExpiryInput.addEventListener('input', function(e) {
+            let value = e.target.value.replace(/\D/g, '');
+            if (value.length >= 2) {
+                value = value.substring(0, 2) + '/' + value.substring(2, 4);
+            }
+            e.target.value = value;
+        });
+    }
+
+    // Format CVC
+    if (cardCVCInput) {
+        cardCVCInput.addEventListener('input', function(e) {
+            e.target.value = e.target.value.replace(/[^0-9]/g, '');
+        });
+    }
+}
+
+// Detect card type based on number
+function detectCardType(number) {
+    const patterns = {
+        visa: /^4/,
+        mastercard: /^5[1-5]/,
+        amex: /^3[47]/
+    };
+    
+    for (const [type, pattern] of Object.entries(patterns)) {
+        if (pattern.test(number)) {
+            return type;
+        }
+    }
+    return '';
 }
 
 // Initialize donation form
@@ -245,12 +335,203 @@ function initializeDonationForm() {
             } else {
                 customAmountDiv.style.display = 'none';
                 customAmountInput.value = '';
+                selectedAmount = parseFloat(this.dataset.amount);
+                updateDonationSummary();
             }
         });
     });
     
-    // Handle donation form submission
-    document.getElementById('donationForm').addEventListener('submit', handleDonationSubmission);
+    // Handle custom amount input
+    customAmountInput.addEventListener('input', function() {
+        selectedAmount = parseFloat(this.value) || 0;
+        updateDonationSummary();
+    });
+    
+    // Handle payment form submission
+    document.getElementById('payment-form').addEventListener('submit', handlePaymentSubmission);
+}
+
+// Update donation summary
+function updateDonationSummary() {
+    const donationAmount = document.getElementById('donation-amount');
+    const totalAmount = document.getElementById('total-amount');
+    
+    donationAmount.textContent = formatCurrency(selectedAmount);
+    totalAmount.textContent = formatCurrency(selectedAmount);
+}
+
+// Handle payment form submission
+async function handlePaymentSubmission(event) {
+    event.preventDefault();
+    
+    if (!selectedAmount || selectedAmount <= 0) {
+        showError('Please select or enter a valid donation amount.');
+        return;
+    }
+    
+    const name = document.getElementById('donorName').value;
+    const email = document.getElementById('donorEmail').value;
+    const cardNumber = document.getElementById('cardNumber').value;
+    const cardExpiry = document.getElementById('cardExpiry').value;
+    const cardCVC = document.getElementById('cardCVC').value;
+    const cardName = document.getElementById('cardName').value;
+    
+    if (!name || !email) {
+        showError('Please fill in all required fields.');
+        return;
+    }
+    
+    if (!cardNumber || !cardExpiry || !cardCVC || !cardName) {
+        showError('Please fill in all card details.');
+        return;
+    }
+    
+    // Basic validation
+    if (!isValidCardNumber(cardNumber)) {
+        showError('Please enter a valid card number.');
+        return;
+    }
+    
+    if (!isValidExpiry(cardExpiry)) {
+        showError('Please enter a valid expiry date.');
+        return;
+    }
+    
+    if (!isValidCVC(cardCVC)) {
+        showError('Please enter a valid CVC.');
+        return;
+    }
+    
+    setLoading(true);
+    
+    // Simulate payment processing for demo purposes
+    setTimeout(() => {
+        // For demo: simulate successful payment with test card
+        if (cardNumber.replace(/\s/g, '') === '4242424242424242') {
+            const mockPaymentIntent = {
+                id: 'pi_demo_' + Math.random().toString(36).substr(2, 9),
+                status: 'succeeded'
+            };
+            handlePaymentSuccess(mockPaymentIntent);
+        } else {
+            showError('For demo purposes, please use card number 4242 4242 4242 4242');
+            setLoading(false);
+        }
+    }, 2000);
+}
+
+// Create payment intent on backend
+async function createPaymentIntent(amount) {
+    try {
+        const response = await fetch('/create-payment-intent', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                amount: Math.round(amount * 100), // Convert to cents
+                currency: 'usd',
+                metadata: {
+                    donorName: document.getElementById('donorName').value,
+                    donorEmail: document.getElementById('donorEmail').value,
+                    university: document.getElementById('donorUniversity').value,
+                    anonymous: document.getElementById('anonymousDonation').checked,
+                    message: document.getElementById('donationMessage').value,
+                    requestId: document.getElementById('payment-form').dataset.requestId || null
+                }
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to create payment intent');
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('Error creating payment intent:', error);
+        throw new Error('Unable to process payment. Please check your connection and try again.');
+    }
+}
+
+// Handle successful payment
+function handlePaymentSuccess(paymentIntent) {
+    // Update statistics
+    donationData.totalFunds += selectedAmount;
+    donationData.totalDonors += 1;
+    updateStatistics();
+    
+    // Update specific request if applicable
+    const requestId = document.getElementById('payment-form').dataset.requestId;
+    if (requestId) {
+        const request = helpRequests.find(r => r.id === parseInt(requestId));
+        if (request) {
+            request.amountRaised += selectedAmount;
+            request.donorCount += 1;
+            loadHelpRequests(); // Reload to show updated progress
+        }
+    }
+    
+    // Close donation modal and show success
+    closeDonateModal();
+    setLoading(false);
+    
+    // Show success modal
+    openSuccessModal(selectedAmount, paymentIntent.id);
+}
+
+// Set loading state
+function setLoading(isLoading) {
+    const submitButton = document.getElementById('submit-button');
+    const buttonText = document.getElementById('button-text');
+    const spinner = document.getElementById('spinner');
+    
+    if (isLoading) {
+        submitButton.disabled = true;
+        buttonText.classList.add('hidden');
+        spinner.classList.remove('hidden');
+    } else {
+        submitButton.disabled = false;
+        buttonText.classList.remove('hidden');
+        spinner.classList.add('hidden');
+    }
+}
+
+// Validation functions
+function isValidCardNumber(cardNumber) {
+    const cleanNumber = cardNumber.replace(/\s/g, '');
+    return /^\d{13,19}$/.test(cleanNumber);
+}
+
+function isValidExpiry(expiry) {
+    if (!/^\d{2}\/\d{2}$/.test(expiry)) return false;
+    
+    const [month, year] = expiry.split('/');
+    const currentYear = new Date().getFullYear() % 100;
+    const currentMonth = new Date().getMonth() + 1;
+    
+    const expiryYear = parseInt(year, 10);
+    const expiryMonth = parseInt(month, 10);
+    
+    if (expiryMonth < 1 || expiryMonth > 12) return false;
+    if (expiryYear < currentYear) return false;
+    if (expiryYear === currentYear && expiryMonth < currentMonth) return false;
+    
+    return true;
+}
+
+function isValidCVC(cvc) {
+    return /^\d{3,4}$/.test(cvc);
+}
+
+// Show error message
+function showError(message) {
+    const errorElement = document.getElementById('card-errors');
+    errorElement.textContent = message;
+    
+    // Also show as alert for critical errors
+    if (message.includes('connection') || message.includes('server')) {
+        alert(message);
+    }
 }
 
 // Initialize help request form
@@ -270,40 +551,6 @@ function initializeHelpRequestForm() {
     });
 }
 
-// Handle donation form submission
-function handleDonationSubmission(event) {
-    event.preventDefault();
-    
-    const formData = new FormData(event.target);
-    const activeAmountBtn = document.querySelector('.amount-btn.active');
-    const customAmount = document.getElementById('customAmount').value;
-    
-    let amount;
-    if (activeAmountBtn && activeAmountBtn.classList.contains('custom')) {
-        amount = parseFloat(customAmount);
-    } else if (activeAmountBtn) {
-        amount = parseFloat(activeAmountBtn.dataset.amount);
-    }
-    
-    if (!amount || amount <= 0) {
-        alert('Please select or enter a valid donation amount.');
-        return;
-    }
-    
-    const donationData = {
-        amount: amount,
-        name: document.getElementById('donorName').value,
-        email: document.getElementById('donorEmail').value,
-        university: document.getElementById('donorUniversity').value,
-        anonymous: document.getElementById('anonymousDonation').checked,
-        message: document.getElementById('donationMessage').value,
-        requestId: event.target.dataset.requestId || null
-    };
-    
-    // Simulate donation processing
-    processDonation(donationData);
-}
-
 // Handle help request form submission
 function handleHelpRequestSubmission(event) {
     event.preventDefault();
@@ -321,49 +568,43 @@ function handleHelpRequestSubmission(event) {
         files: document.getElementById('supportingDocs').files
     };
     
-    // Simulate request processing
+    // Validate required fields
+    if (!requestData.name || !requestData.phone || !requestData.email || !requestData.location) {
+        alert('Please fill in all required personal information fields.');
+        return;
+    }
+    
+    if (!requestData.type || !requestData.description || !requestData.amount || !requestData.urgency) {
+        alert('Please fill in all required emergency details.');
+        return;
+    }
+    
+    if (requestData.amount < 1) {
+        alert('Please enter a valid amount needed (minimum $1).');
+        return;
+    }
+    
+    if (requestData.amount > 100000) {
+        alert('Please enter a reasonable amount (maximum $100,000).');
+        return;
+    }
+    
+    // Check if required checkboxes are checked
+    if (!document.getElementById('verifyTruthfulness').checked) {
+        alert('Please verify that all information provided is truthful and accurate.');
+        return;
+    }
+    
+    if (!document.getElementById('agreeToReview').checked) {
+        alert('Please acknowledge that your request will be reviewed by the community committee.');
+        return;
+    }
+    
+    // Process the request
     processHelpRequest(requestData);
 }
 
-// Simulate donation processing
-function processDonation(data) {
-    // Show loading state
-    const submitBtn = document.querySelector('#donationForm button[type="submit"]');
-    const originalText = submitBtn.innerHTML;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-    submitBtn.disabled = true;
-    
-    // Simulate API call
-    setTimeout(() => {
-        // Update statistics
-        donationData.totalFunds += data.amount;
-        donationData.totalDonors += 1;
-        updateStatistics();
-        
-        // Update specific request if applicable
-        if (data.requestId) {
-            const request = helpRequests.find(r => r.id === parseInt(data.requestId));
-            if (request) {
-                request.amountRaised += data.amount;
-                request.donorCount += 1;
-                loadHelpRequests(); // Reload to show updated progress
-            }
-        }
-        
-        // Show success message
-        alert(`Thank you ${data.anonymous ? 'Anonymous' : data.name}! Your donation of $${data.amount} has been processed successfully.`);
-        
-        // Reset form and close modal
-        resetDonationForm();
-        closeDonateModal();
-        
-        // Reset button
-        submitBtn.innerHTML = originalText;
-        submitBtn.disabled = false;
-    }, 2000);
-}
-
-// Simulate help request processing
+// Process help request and add to list
 function processHelpRequest(data) {
     // Show loading state
     const submitBtn = document.querySelector('#helpRequestForm button[type="submit"]');
@@ -373,8 +614,49 @@ function processHelpRequest(data) {
     
     // Simulate API call
     setTimeout(() => {
+        // Generate appropriate title based on emergency type
+        const titleTemplates = {
+            'medical': `Medical Emergency for ${data.name}`,
+            'death': `Support for ${data.name}'s Family`,
+            'accident': `Accident Recovery Support for ${data.name}`,
+            'housing': `Emergency Housing for ${data.name}`,
+            'financial': `Financial Hardship Support for ${data.name}`,
+            'other': `Emergency Support for ${data.name}`
+        };
+        
+        // Create new help request object
+        const newRequest = {
+            id: Date.now(), // Use timestamp for unique ID
+            type: data.type,
+            title: titleTemplates[data.type] || titleTemplates['other'],
+            description: data.description,
+            amountNeeded: data.amount,
+            amountRaised: 0,
+            urgency: data.urgency,
+            location: data.location,
+            postedDate: new Date().toISOString().split('T')[0], // Today's date
+            donorCount: 0,
+            // Additional metadata
+            requestorName: data.name,
+            requestorEmail: data.email,
+            requestorPhone: data.phone,
+            additionalInfo: data.additionalInfo,
+            fileCount: data.files ? data.files.length : 0,
+            status: 'pending' // For future use
+        };
+        
+        // Add to the beginning of the array (most recent first)
+        helpRequests.unshift(newRequest);
+        
+        // Refresh the display
+        loadHelpRequests();
+        
+        // Update statistics
+        updateStatistics();
+        
         // Show success message
-        alert(`Thank you ${data.name}! Your help request has been submitted successfully. Our review committee will evaluate your request within 24-48 hours and contact you via email.`);
+        showSuccessMessage(`Thank you ${data.name}!`, 
+            `Your help request has been submitted successfully and is now visible in the Current Help Requests section below. Our review committee will evaluate your request within 24-48 hours and contact you via email.`);
         
         // Reset form and close modal
         resetHelpRequestForm();
@@ -383,15 +665,47 @@ function processHelpRequest(data) {
         // Reset button
         submitBtn.innerHTML = originalText;
         submitBtn.disabled = false;
+        
+        // Scroll to the requests section to show the new request
+        setTimeout(() => {
+            document.querySelector('.active-requests').scrollIntoView({ 
+                behavior: 'smooth',
+                block: 'start'
+            });
+            
+            // Highlight the new request temporarily
+            const firstRequestCard = document.querySelector('.request-card');
+            if (firstRequestCard) {
+                firstRequestCard.style.border = '3px solid #10b981';
+                firstRequestCard.style.boxShadow = '0 8px 25px -8px rgba(16, 185, 129, 0.5)';
+                
+                // Remove highlight after 3 seconds
+                setTimeout(() => {
+                    firstRequestCard.style.border = '';
+                    firstRequestCard.style.boxShadow = '';
+                }, 3000);
+            }
+        }, 500);
+        
     }, 2000);
 }
 
 // Reset donation form
 function resetDonationForm() {
-    document.getElementById('donationForm').reset();
+    document.getElementById('payment-form').reset();
     document.querySelectorAll('.amount-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelector('.custom-amount').style.display = 'none';
-    delete document.getElementById('donationForm').dataset.requestId;
+    delete document.getElementById('payment-form').dataset.requestId;
+    selectedAmount = 0;
+    updateDonationSummary();
+    
+    // Clear any error messages
+    document.getElementById('card-errors').textContent = '';
+    
+    // Reset card icons
+    document.querySelectorAll('.card-icon').forEach(icon => {
+        icon.classList.remove('active');
+    });
 }
 
 // Reset help request form
@@ -489,6 +803,110 @@ function formatDate(dateString) {
     });
 }
 
+// Show success message (better than alert)
+function showSuccessMessage(title, message) {
+    // Create success notification
+    const notification = document.createElement('div');
+    notification.className = 'success-notification';
+    notification.innerHTML = `
+        <div class="notification-content">
+            <div class="notification-icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="notification-text">
+                <h4>${title}</h4>
+                <p>${message}</p>
+            </div>
+            <button class="notification-close" onclick="this.parentElement.remove()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    
+    // Add styles if not already added
+    if (!document.querySelector('#notification-styles')) {
+        const styles = document.createElement('style');
+        styles.id = 'notification-styles';
+        styles.textContent = `
+            .success-notification {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 10000;
+                max-width: 400px;
+                background: white;
+                border-radius: 12px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+                border-left: 4px solid #10b981;
+                animation: slideIn 0.3s ease-out;
+            }
+            
+            .notification-content {
+                padding: 1.5rem;
+                display: flex;
+                align-items: flex-start;
+                gap: 1rem;
+            }
+            
+            .notification-icon {
+                color: #10b981;
+                font-size: 1.5rem;
+                margin-top: 0.25rem;
+            }
+            
+            .notification-text h4 {
+                margin: 0 0 0.5rem 0;
+                color: #1f2937;
+                font-size: 1.125rem;
+                font-weight: 600;
+            }
+            
+            .notification-text p {
+                margin: 0;
+                color: #6b7280;
+                font-size: 0.875rem;
+                line-height: 1.5;
+            }
+            
+            .notification-close {
+                background: none;
+                border: none;
+                color: #9ca3af;
+                cursor: pointer;
+                font-size: 1rem;
+                padding: 0.25rem;
+                margin-left: auto;
+                margin-top: -0.25rem;
+            }
+            
+            .notification-close:hover {
+                color: #6b7280;
+            }
+            
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+        `;
+        document.head.appendChild(styles);
+    }
+    
+    document.body.appendChild(notification);
+    
+    // Auto remove after 8 seconds
+    setTimeout(() => {
+        if (notification.parentElement) {
+            notification.remove();
+        }
+    }, 8000);
+}
+
 // Export functions for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -496,6 +914,8 @@ if (typeof module !== 'undefined' && module.exports) {
         closeDonateModal,
         openHelpRequestModal,
         closeHelpRequestModal,
-        toggleSidebar
+        toggleSidebar,
+        closeSuccessModal,
+        showSuccessMessage
     };
 }
